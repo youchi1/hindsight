@@ -168,9 +168,9 @@ Options:
     process.exit(0);
   }
 
-  // Skip "install" or "setup" if passed as first arg
-  let dirArg = (args[0] === "install" || args[0] === "setup") ? args[1] : args[0];
-  const restArgs = (args[0] === "install" || args[0] === "setup") ? args.slice(2) : args.slice(1);
+  // Skip "install" if passed as first arg
+  let dirArg = args[0] === "install" ? args[1] : args[0];
+  const restArgs = args[0] === "install" ? args.slice(2) : args.slice(1);
 
   if (!dirArg) {
     console.error("Error: directory argument required");
