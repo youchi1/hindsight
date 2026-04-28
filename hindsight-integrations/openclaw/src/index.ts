@@ -14,7 +14,8 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import * as log from "./logger.js";
 import { configureLogger, setApiLogger, stopLogger } from "./logger.js";
-import { mkdirSync, readFileSync } from "fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from "fs";
+import { extname } from "path";
 import { homedir } from "os";
 import { createKnowledgeToolFactory } from "./knowledge-tools.js";
 
@@ -1879,6 +1880,71 @@ export default function (api: MoltbotPluginAPI) {
         debug(
           `[Hindsight] before_agent_start - bank: ${bankId}, channel: ${resolvedCtx.messageProvider}/${resolvedCtx.channelId}`
         );
+
+        // First-run bootstrap: import bank-template.json + ingest content/ from workspace
+        const workspaceDir = ctx?.workspaceDir;
+        if (workspaceDir) {
+          const hindsightDir = join(workspaceDir, ".hindsight");
+          const templateFile = join(hindsightDir, "bank-template.json");
+          const doneMarker = join(hindsightDir, ".bootstrapped");
+
+          if (existsSync(templateFile) && !existsSync(doneMarker)) {
+            log.info(`first-run bootstrap for bank ${bankId}`);
+            try {
+              const clientGlobal = (global as any).__hindsightClient;
+              if (!clientGlobal) {
+                log.warn("bootstrap: client not available yet, skipping");
+              } else {
+                await clientGlobal.waitForReady();
+                const bankClient = await clientGlobal.getClientForBank(bankId);
+
+                // Import template
+                const template = JSON.parse(readFileSync(templateFile, "utf-8"));
+                const apiUrl = clientGlobal.getApiUrl?.() || pluginConfig.hindsightApiUrl;
+                if (apiUrl) {
+                  // Use raw HTTP for import (not in generated client)
+                  const headers: Record<string, string> = { "Content-Type": "application/json" };
+                  const token = pluginConfig.hindsightApiToken;
+                  if (token) headers["Authorization"] = `Bearer ${token}`;
+                  const resp = await fetch(`${apiUrl}/v1/default/banks/${bankId}/import`, {
+                    method: "POST", headers, body: JSON.stringify(template),
+                  });
+                  if (resp.ok) {
+                    log.info("bank template imported");
+                  } else {
+                    log.warn(`template import failed (${resp.status})`);
+                  }
+                }
+
+                // Ingest content files
+                const contentDir = join(hindsightDir, "content");
+                if (existsSync(contentDir)) {
+                  const exts = new Set([".md", ".txt", ".html", ".json", ".csv", ".xml"]);
+                  const files = readdirSync(contentDir).filter((f: string) => exts.has(extname(f).toLowerCase()));
+                  for (const file of files) {
+                    const content = readFileSync(join(contentDir, file), "utf-8");
+                    if (!content.trim()) continue;
+                    const docId = file.replace(/\.[^.]+$/, "");
+                    const headers: Record<string, string> = { "Content-Type": "application/json" };
+                    const token = pluginConfig.hindsightApiToken;
+                    if (token) headers["Authorization"] = `Bearer ${token}`;
+                    await fetch(`${apiUrl}/v1/default/banks/${bankId}/memories`, {
+                      method: "POST", headers,
+                      body: JSON.stringify({ items: [{ content, document_id: docId }], async: true }),
+                    });
+                    log.info(`ingested ${file}`);
+                  }
+                }
+
+                // Mark as done
+                writeFileSync(doneMarker, new Date().toISOString());
+                log.info("first-run bootstrap complete");
+              }
+            } catch (err) {
+              log.warn(`first-run bootstrap failed: ${err}`);
+            }
+          }
+        }
       } catch (error) {
         log.warn(`before_agent_start identity resolution error: ${error}`);
       }
