@@ -11,12 +11,12 @@ You have knowledge pages that persist across sessions and auto-update from your 
 
 ## At session start
 
-Call `agent_knowledge_list_pages` to load your knowledge. Apply what you read.
+Call `agent_knowledge_list_pages` to see what pages exist, then `agent_knowledge_get_page` for each one you need.
 
 ## Reading
 
-- `agent_knowledge_list_pages()` — all pages with content
-- `agent_knowledge_get_page(page_id)` — one page in detail
+- `agent_knowledge_list_pages()` — list page IDs and names (no content)
+- `agent_knowledge_get_page(page_id)` — read the full content of a page
 
 ## Creating pages
 

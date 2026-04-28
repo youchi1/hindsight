@@ -59,10 +59,10 @@ export function createWikiToolFactory(deps: ToolDeps) {
       {
         name: "agent_knowledge_list_pages",
         label: "List knowledge pages",
-        description: "List all your knowledge pages. Each page has an ID, name, source query, and synthesized content that auto-updates from your conversations.",
+        description: "List all your knowledge pages (IDs and names only). Use agent_knowledge_get_page to read the full content of a specific page.",
         parameters: { type: "object", properties: {} },
         async execute() {
-          return ok(await req(apiUrl, `${bp}/mental-models`, "GET", undefined, token));
+          return ok(await req(apiUrl, `${bp}/mental-models?detail=metadata`, "GET", undefined, token));
         },
       },
       {
