@@ -1298,9 +1298,6 @@ def _register_create_mental_model(mcp: FastMCP, memory: MemoryEngine, config: MC
             tags: list[str] | None = None,
             max_tokens: int = 2048,
             trigger_refresh_after_consolidation: bool = False,
-            trigger_mode: str = "full",
-            trigger_exclude_mental_models: bool = False,
-            trigger_fact_types: list[str] | None = None,
             bank_id: str | None = None,
         ) -> str:
             """
@@ -1322,9 +1319,6 @@ def _register_create_mental_model(mcp: FastMCP, memory: MemoryEngine, config: MC
                 tags: Optional tags for scoped visibility filtering
                 max_tokens: Maximum tokens for generated content (256-8192, default: 2048)
                 trigger_refresh_after_consolidation: If True, automatically refresh this model after memory consolidation. Default: False
-                trigger_mode: Refresh mode - "full" (resynthesize from all observations) or "delta" (only new observations). Default: "full"
-                trigger_exclude_mental_models: If True, exclude other mental models from synthesis context. Default: False
-                trigger_fact_types: Optional list of fact types to include (e.g. ["observation"]). Default: all types.
                 bank_id: Optional bank (defaults to session bank). Use for cross-bank operations.
             """
             try:
@@ -1339,13 +1333,7 @@ def _register_create_mental_model(mcp: FastMCP, memory: MemoryEngine, config: MC
                     return json.dumps({"error": validation_error})
 
                 request_context = _get_request_context(config)
-                trigger: dict = {
-                    "refresh_after_consolidation": trigger_refresh_after_consolidation,
-                    "mode": trigger_mode,
-                    "exclude_mental_models": trigger_exclude_mental_models,
-                }
-                if trigger_fact_types:
-                    trigger["fact_types"] = trigger_fact_types
+                trigger = {"refresh_after_consolidation": trigger_refresh_after_consolidation}
 
                 # Create with placeholder content
                 model = await memory.create_mental_model(
@@ -1394,9 +1382,6 @@ def _register_create_mental_model(mcp: FastMCP, memory: MemoryEngine, config: MC
             tags: list[str] | None = None,
             max_tokens: int = 2048,
             trigger_refresh_after_consolidation: bool = False,
-            trigger_mode: str = "full",
-            trigger_exclude_mental_models: bool = False,
-            trigger_fact_types: list[str] | None = None,
         ) -> dict:
             """
             Create a new mental model (pinned reflection).
@@ -1417,9 +1402,6 @@ def _register_create_mental_model(mcp: FastMCP, memory: MemoryEngine, config: MC
                 tags: Optional tags for scoped visibility filtering
                 max_tokens: Maximum tokens for generated content (256-8192, default: 2048)
                 trigger_refresh_after_consolidation: If True, automatically refresh this model after memory consolidation. Default: False
-                trigger_mode: Refresh mode - "full" (resynthesize from all) or "delta" (only new observations). Default: "full"
-                trigger_exclude_mental_models: If True, exclude other mental models from synthesis. Default: False
-                trigger_fact_types: Optional list of fact types to include (e.g. ["observation"]). Default: all types.
             """
             try:
                 target_bank = config.bank_id_resolver()
@@ -1433,13 +1415,7 @@ def _register_create_mental_model(mcp: FastMCP, memory: MemoryEngine, config: MC
                     return {"error": validation_error}
 
                 request_context = _get_request_context(config)
-                trigger: dict = {
-                    "refresh_after_consolidation": trigger_refresh_after_consolidation,
-                    "mode": trigger_mode,
-                    "exclude_mental_models": trigger_exclude_mental_models,
-                }
-                if trigger_fact_types:
-                    trigger["fact_types"] = trigger_fact_types
+                trigger = {"refresh_after_consolidation": trigger_refresh_after_consolidation}
 
                 model = await memory.create_mental_model(
                     bank_id=target_bank,
