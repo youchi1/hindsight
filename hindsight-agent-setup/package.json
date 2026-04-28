@@ -3,12 +3,31 @@
   "version": "0.1.0",
   "description": "Install self-driving agents with portable memory on any harness",
   "type": "module",
+  "main": "dist/cli.js",
   "bin": {
     "self-driving-agents": "dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai-agents",
+    "self-driving",
+    "hindsight",
+    "memory",
+    "openclaw",
+    "hermes",
+    "claude-code"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vectorize-io/hindsight.git",
+    "directory": "hindsight-agent-setup"
   },
   "devDependencies": {
     "typescript": "^5.4"
