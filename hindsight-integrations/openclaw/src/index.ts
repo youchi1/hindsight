@@ -8,6 +8,7 @@ import type {
 import { HindsightServer, type Logger } from "@vectorize-io/hindsight-all";
 import { HindsightClient, type HindsightClientOptions } from "@vectorize-io/hindsight-client";
 import { defaultOpenClawRoot } from "./backfill-lib.js";
+import { detectBundledPythonRoot } from "./bundled-source.js";
 import { RetainQueue } from "./retain-queue.js";
 import { compileSessionPatterns, matchesSessionPattern } from "./session-patterns.js";
 import { DEFAULT_OPENCLAW_CONFIG_PATH, NO_KEY_PROVIDERS } from "./setup-lib.js";
@@ -1361,7 +1362,7 @@ function getPluginConfig(api: MoltbotPluginAPI): PluginConfig {
     embedPort: config.embedPort || 0,
     daemonIdleTimeout: config.daemonIdleTimeout !== undefined ? config.daemonIdleTimeout : 0,
     embedVersion: config.embedVersion || "latest",
-    embedPackagePath: config.embedPackagePath,
+    embedPackagePath: config.embedPackagePath ?? detectBundledPythonRoot(),
     llmProvider: config.llmProvider,
     llmAuthSource: config.llmAuthSource,
     llmModel: config.llmModel,
