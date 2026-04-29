@@ -38,6 +38,8 @@ class AnthropicLLM(LLMInterface):
         reasoning_effort: str = "low",
         timeout: float = 300.0,
         default_headers: dict[str, str] | None = None,
+        auth_token: str | None = None,
+        extra_headers: dict[str, str] | None = None,
         **kwargs: Any,
     ):
         """
@@ -54,32 +56,65 @@ class AnthropicLLM(LLMInterface):
                 the Anthropic SDK client. Used by operators routing through proxies
                 or request-tracing middleware. Sourced from ``llm_default_headers`` in
                 ``HindsightConfig`` (env: ``HINDSIGHT_API_LLM_DEFAULT_HEADERS``).
+            auth_token: OAuth access token (OAT) for Anthropic OAuth flow.
+                When provided, uses Authorization: Bearer instead of x-api-key.
+            extra_headers: Additional headers (e.g. anthropic-beta for OAuth).
+                Merged into ``default_headers`` when both are set.
             **kwargs: Additional provider-specific parameters.
         """
         super().__init__(provider, api_key, base_url, model, reasoning_effort, **kwargs)
 
-        if not self.api_key:
-            raise ValueError("API key is required for Anthropic provider")
+        if not self.api_key and not auth_token:
+            raise ValueError("API key or auth_token is required for Anthropic provider")
 
-        # Import and initialize Anthropic client
+        self._timeout = timeout
+        self._default_headers = default_headers
         try:
-            from anthropic import AsyncAnthropic
-
-            # SDK retries disabled — wrapper-level retry loop in ``call`` handles
-            # backoff (mirrors ``OpenAICompatibleLLM`` so the two providers behave
-            # consistently).
-            client_kwargs: dict[str, Any] = {"api_key": self.api_key, "max_retries": 0}
-            if self.base_url:
-                client_kwargs["base_url"] = self.base_url
-            if timeout:
-                client_kwargs["timeout"] = timeout
-            if default_headers:
-                client_kwargs["default_headers"] = default_headers
-
-            self._client = AsyncAnthropic(**client_kwargs)
+            self._client = self._make_client(
+                api_key=None if auth_token else self.api_key,
+                auth_token=auth_token,
+                extra_headers=extra_headers,
+            )
             logger.info(f"Anthropic client initialized for model: {self.model}")
         except ImportError as e:
             raise RuntimeError("Anthropic SDK not installed. Run: uv add anthropic or pip install anthropic") from e
+
+    def _make_client(
+        self,
+        *,
+        api_key: str | None = None,
+        auth_token: str | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> Any:
+        """Build an AsyncAnthropic client preserving base_url and timeout.
+
+        OATs (sk-ant-oat*) authenticate via Bearer + the oauth-2025-04-20 beta
+        header; the standard x-api-key path rejects them.
+        """
+        from anthropic import AsyncAnthropic
+
+        # SDK retries disabled — wrapper-level retry loop in ``call`` handles
+        # backoff (mirrors ``OpenAICompatibleLLM`` so the two providers behave
+        # consistently).
+        client_kwargs: dict[str, Any] = {"max_retries": 0}
+        if auth_token:
+            client_kwargs["auth_token"] = auth_token
+            logger.info("Anthropic client using OAuth token (auth_token)")
+        else:
+            client_kwargs["api_key"] = api_key
+        # Merge operator-supplied default_headers with OAT-required extra_headers.
+        merged_headers: dict[str, str] = {}
+        if self._default_headers:
+            merged_headers.update(self._default_headers)
+        if extra_headers:
+            merged_headers.update(extra_headers)
+        if merged_headers:
+            client_kwargs["default_headers"] = merged_headers
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
+        if self._timeout:
+            client_kwargs["timeout"] = self._timeout
+        return AsyncAnthropic(**client_kwargs)
 
     async def verify_connection(self) -> None:
         """
@@ -101,6 +136,44 @@ class AnthropicLLM(LLMInterface):
         except Exception as e:
             logger.error(f"Anthropic connection verification failed: {e}")
             raise RuntimeError(f"Failed to verify Anthropic connection: {e}") from e
+
+    def _try_openclaw_reauth(self) -> bool:
+        """Re-read OpenClaw auth-profiles and rebuild the Anthropic client.
+
+        Called on 401/403 when llmAuthSource="openclaw". The attempted-flag is
+        only cleared after a *successful* API call (see `_mark_openclaw_reauth_succeeded`)
+        so a stale on-disk credential can't trigger a per-retry reload storm.
+        """
+        openclaw_config = getattr(self, "_openclaw_auth_config", None)
+        if not openclaw_config:
+            return False
+        if getattr(self, "_openclaw_reauth_attempted", False):
+            return False
+
+        try:
+            from .openclaw_auth import reload_credentials
+
+            cred = reload_credentials(self.provider, openclaw_config)
+            if cred.auth_token:
+                self._client = self._make_client(auth_token=cred.auth_token, extra_headers=cred.extra_headers)
+            elif cred.api_key:
+                self.api_key = cred.api_key
+                self._client = self._make_client(api_key=cred.api_key)
+            else:
+                return False
+        except Exception as e:
+            logger.warning(f"OpenClaw credential reload failed: {e}")
+            return False
+
+        self._openclaw_reauth_attempted = True
+        logger.info(f"Re-authenticated Anthropic via OpenClaw profile {cred.profile_id}")
+        return True
+
+    def _mark_openclaw_reauth_succeeded(self) -> None:
+        """Clear the reauth flag after a successful API call so a future token
+        rotation can trigger another reload."""
+        if getattr(self, "_openclaw_reauth_attempted", False):
+            self._openclaw_reauth_attempted = False
 
     async def call(
         self,
@@ -232,6 +305,7 @@ class AnthropicLLM(LLMInterface):
                     output_tokens=output_tokens,
                     success=True,
                 )
+                self._mark_openclaw_reauth_succeeded()
 
                 # Record trace span
                 from hindsight_api.tracing import _serialize_for_span, get_span_recorder
@@ -280,8 +354,10 @@ class AnthropicLLM(LLMInterface):
                     raise
 
             except (APIConnectionError, RateLimitError, APIStatusError) as e:
-                # Fast fail on 401/403
+                # On 401/403 with OpenClaw auth source, re-read credentials and retry once.
                 if isinstance(e, APIStatusError) and e.status_code in (401, 403):
+                    if self._try_openclaw_reauth():
+                        continue
                     logger.error(f"Anthropic auth error (HTTP {e.status_code}), not retrying: {str(e)}")
                     raise
 
@@ -435,6 +511,7 @@ class AnthropicLLM(LLMInterface):
                     output_tokens=output_tokens,
                     success=True,
                 )
+                self._mark_openclaw_reauth_succeeded()
 
                 # Record OpenTelemetry span
                 from hindsight_api.tracing import get_span_recorder
@@ -470,6 +547,8 @@ class AnthropicLLM(LLMInterface):
 
             except (APIConnectionError, APIStatusError) as e:
                 if isinstance(e, APIStatusError) and e.status_code in (401, 403):
+                    if self._try_openclaw_reauth():
+                        continue
                     raise
                 last_exception = e
                 if attempt < max_retries:

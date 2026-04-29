@@ -27,8 +27,11 @@ except ImportError:
 from ..config import (
     DEFAULT_LLM_MAX_CONCURRENT,
     DEFAULT_LLM_TIMEOUT,
+    ENV_LLM_AUTH_SOURCE,
     ENV_LLM_GROQ_SERVICE_TIER,
     ENV_LLM_MAX_CONCURRENT,
+    ENV_LLM_OPENCLAW_AUTH_PROFILES_PATH,
+    ENV_LLM_OPENCLAW_CONFIG_PATH,
     ENV_LLM_TIMEOUT,
 )
 from ..metrics import get_metrics_collector
@@ -155,6 +158,10 @@ def create_llm_provider(
     vertexai_credentials: Any = None,
     gemini_safety_settings: list | None = None,
     litellmrouter_config: dict[str, Any] | None = None,
+    auth_token: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+    openclaw_access_token: str | None = None,
+    openclaw_account_id: str | None = None,
 ) -> Any:  # Returns LLMInterface
     """
     Factory function to create the appropriate LLM provider implementation.
@@ -201,6 +208,8 @@ def create_llm_provider(
             base_url=base_url,
             model=model,
             reasoning_effort=reasoning_effort,
+            openclaw_access_token=openclaw_access_token,
+            openclaw_account_id=openclaw_account_id,
         )
 
     elif provider_lower == "claude-code":
@@ -251,6 +260,8 @@ def create_llm_provider(
             model=model,
             reasoning_effort=reasoning_effort,
             default_headers=default_headers,
+            auth_token=auth_token,
+            extra_headers=extra_headers,
         )
 
     elif provider_lower == "litellm":
@@ -354,6 +365,8 @@ class LLMProvider:
         extra_body: dict[str, Any] | None = None,
         default_headers: dict[str, str] | None = None,
         litellmrouter_config: dict[str, Any] | None = None,
+        _openclaw_credential: Any = None,
+        _openclaw_auth_config: Any = None,
     ):
         """
         Initialize LLM provider.
@@ -377,7 +390,31 @@ class LLMProvider:
                 https://docs.litellm.ai/docs/routing. Ignored unless ``provider == "litellmrouter"``.
                 When None and the provider is ``litellmrouter``, falls back to
                 ``HindsightConfig.llm_litellmrouter_config``.
+            _openclaw_credential: OpenClawCredential from openclaw_auth resolver (internal).
+            _openclaw_auth_config: OpenClawAuthConfig paths (internal).
         """
+        # Auto-resolve OpenClaw credentials when the env var is set but no
+        # credential was passed in. Without this, callers that build LLMProvider
+        # directly (e.g. MemoryEngine) bypass the auth-source path that
+        # from_env() applies, and providers fall back to local CLI auth files
+        # that don't exist on a customer VPS.
+        if _openclaw_credential is None and os.getenv(ENV_LLM_AUTH_SOURCE) == "openclaw":
+            from .providers.openclaw_auth import OpenClawAuthConfig, resolve_openclaw_credentials
+
+            _openclaw_auth_config = OpenClawAuthConfig(
+                config_path=os.getenv(ENV_LLM_OPENCLAW_CONFIG_PATH, ""),
+                auth_profiles_path=os.getenv(ENV_LLM_OPENCLAW_AUTH_PROFILES_PATH, ""),
+            )
+            _openclaw_credential = resolve_openclaw_credentials(provider, _openclaw_auth_config)
+            if _openclaw_credential.api_key and not api_key:
+                api_key = _openclaw_credential.api_key
+            logger.info(
+                f"OpenClaw auth resolved in __init__: provider={provider}, "
+                f"profile={_openclaw_credential.profile_id}, type={_openclaw_credential.profile_type}"
+            )
+
+        self._openclaw_credential = _openclaw_credential
+        self._openclaw_auth_config = _openclaw_auth_config
         self.provider = provider.lower()
         self.api_key = api_key
         self.base_url = base_url
@@ -513,6 +550,16 @@ class LLMProvider:
             except Exception:
                 router_config = None
 
+        openclaw_cred = self._openclaw_credential
+        openclaw_kwargs: dict[str, Any] = {}
+        if openclaw_cred is not None:
+            if openclaw_cred.auth_token:
+                openclaw_kwargs["auth_token"] = openclaw_cred.auth_token
+                openclaw_kwargs["extra_headers"] = openclaw_cred.extra_headers
+            if openclaw_cred.account_id:
+                openclaw_kwargs["openclaw_access_token"] = openclaw_cred.api_key
+                openclaw_kwargs["openclaw_account_id"] = openclaw_cred.account_id
+
         # Create provider implementation using factory
         self._provider_impl = create_llm_provider(
             provider=self.provider,
@@ -529,7 +576,11 @@ class LLMProvider:
             vertexai_credentials=vertexai_credentials,
             gemini_safety_settings=self.gemini_safety_settings,
             litellmrouter_config=router_config,
+            **openclaw_kwargs,
         )
+
+        if self._openclaw_auth_config is not None:
+            self._provider_impl._openclaw_auth_config = self._openclaw_auth_config
 
         # Backward compatibility: Keep mock provider properties
         self._mock_calls: list[dict] = []
@@ -839,14 +890,46 @@ class LLMProvider:
             DEFAULT_LLM_MODEL,
             DEFAULT_LLM_PROVIDER,
             ENV_LLM_API_KEY,
+            ENV_LLM_AUTH_SOURCE,
             ENV_LLM_BASE_URL,
             ENV_LLM_DEFAULT_HEADERS,
             ENV_LLM_EXTRA_BODY,
             ENV_LLM_MODEL,
+            ENV_LLM_OPENCLAW_AUTH_PROFILES_PATH,
+            ENV_LLM_OPENCLAW_CONFIG_PATH,
             ENV_LLM_PROVIDER,
         )
 
         provider = os.getenv(ENV_LLM_PROVIDER, DEFAULT_LLM_PROVIDER)
+        auth_source = os.getenv(ENV_LLM_AUTH_SOURCE, "env")
+        base_url = os.getenv(ENV_LLM_BASE_URL, "")
+        model = os.getenv(ENV_LLM_MODEL, DEFAULT_LLM_MODEL)
+        extra_body = json.loads(os.getenv(ENV_LLM_EXTRA_BODY, "null"))
+        default_headers = json.loads(os.getenv(ENV_LLM_DEFAULT_HEADERS, "null"))
+
+        if auth_source == "openclaw":
+            from .providers.openclaw_auth import OpenClawAuthConfig, resolve_openclaw_credentials
+
+            openclaw_config = OpenClawAuthConfig(
+                config_path=os.getenv(ENV_LLM_OPENCLAW_CONFIG_PATH, ""),
+                auth_profiles_path=os.getenv(ENV_LLM_OPENCLAW_AUTH_PROFILES_PATH, ""),
+            )
+            cred = resolve_openclaw_credentials(provider, openclaw_config)
+            logger.info(
+                f"OpenClaw auth resolved: provider={provider}, profile={cred.profile_id}, type={cred.profile_type}"
+            )
+            return cls(
+                provider=provider,
+                api_key=cred.api_key or "",
+                base_url=base_url,
+                model=model,
+                reasoning_effort="low",
+                extra_body=extra_body,
+                default_headers=default_headers,
+                _openclaw_credential=cred,
+                _openclaw_auth_config=openclaw_config,
+            )
+
         api_key = os.getenv(ENV_LLM_API_KEY, "")
 
         if not api_key and not requires_api_key(provider):
@@ -855,11 +938,6 @@ class LLMProvider:
             raise ValueError(
                 f"{ENV_LLM_API_KEY} environment variable is required (unless using openai-codex, claude-code, or litellm)"
             )
-
-        base_url = os.getenv(ENV_LLM_BASE_URL, "")
-        model = os.getenv(ENV_LLM_MODEL, DEFAULT_LLM_MODEL)
-        extra_body = json.loads(os.getenv(ENV_LLM_EXTRA_BODY, "null"))
-        default_headers = json.loads(os.getenv(ENV_LLM_DEFAULT_HEADERS, "null"))
 
         return cls(
             provider=provider,
