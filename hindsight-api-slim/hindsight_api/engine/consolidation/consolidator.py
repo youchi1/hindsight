@@ -1038,7 +1038,7 @@ async def _execute_update_action(
                 INSERT INTO {fq_table("observation_sources")} (observation_id, source_id)
                 VALUES ($1, $2)
                 """,
-                [(obs_uuid, sid) for sid in source_ids],
+                [(obs_uuid, sid) for sid in dict.fromkeys(source_ids)],
             )
 
     if perf:
