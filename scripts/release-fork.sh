@@ -20,11 +20,12 @@
 #   4. The `fork` git remote points at your fork (gh repo fork sets this up)
 #
 # Usage:
-#   scripts/release-fork.sh <version> [<namespace>]
+#   scripts/release-fork.sh <version> [<namespace>] [--no-publish]
 #   HINDSIGHT_FORK_NAMESPACE=youchi1 scripts/release-fork.sh 0.6.7-fork.1
 #
-# Example:
-#   scripts/release-fork.sh 0.6.7-fork.1 youchi1
+# Examples:
+#   scripts/release-fork.sh 0.6.7-fork.5 youchi1
+#   scripts/release-fork.sh 0.6.7-fork.5 youchi1 --no-publish   # build tarball only, for VPS smoke-testing
 
 set -euo pipefail
 
@@ -38,7 +39,19 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 die() { print_error "$1"; exit 1; }
 
 # ---------- args ----------
-[ $# -ge 1 ] || die "Usage: $0 <version> [<namespace>]"
+NO_PUBLISH=false
+POSITIONAL=()
+for arg in "$@"; do
+  case "$arg" in
+    --no-publish) NO_PUBLISH=true ;;
+    -h|--help)
+      sed -n '2,28p' "$0"; exit 0 ;;
+    *) POSITIONAL+=("$arg") ;;
+  esac
+done
+set -- "${POSITIONAL[@]}"
+
+[ $# -ge 1 ] || die "Usage: $0 <version> [<namespace>] [--no-publish]"
 VERSION="$1"
 NAMESPACE="${2:-${HINDSIGHT_FORK_NAMESPACE:-}}"
 [ -n "$NAMESPACE" ] || die "namespace required (arg 2 or HINDSIGHT_FORK_NAMESPACE env var)"
@@ -247,26 +260,51 @@ RSYNC_EXCLUDES=(
 rsync -a "${RSYNC_EXCLUDES[@]}" "$REPO_ROOT/hindsight-embed/"     ./hindsight-embed/
 rsync -a "${RSYNC_EXCLUDES[@]}" "$REPO_ROOT/hindsight-api-slim/"  ./hindsight-api-slim/
 
-# Patch the bundled daemon spawner to install all hindsight-api-slim extras.
-# Upstream `uv run --project hindsight-api-slim hindsight-api` only resolves
-# base deps; on a fresh customer VPS the daemon then crashes at startup with
-# `pg0-embedded is required` (and would also miss sentence-transformers for
-# local embeddings). `--all-extras` pulls embedded-db + local-ml + future
-# extras. Local dev hides this because the workspace .venv is pre-synced.
+# Patch the bundled daemon spawner to install hindsight-api-slim's runtime
+# extras. Upstream `uv run --project hindsight-api-slim hindsight-api` only
+# resolves base deps; on a fresh customer VPS the daemon crashes at startup
+# with `pg0-embedded is required` (and misses sentence-transformers for
+# local embeddings).
+#
+# Use `--extra all` (defined in pyproject.toml as local-ml + embedded-db),
+# NOT `--all-extras`. The latter also pulls the `local-llm` extra, which
+# depends on `llama-cpp-python` -- that compiles from source via CMake/gcc
+# and fails on stripped-down VPSes that don't ship build tools.
 DAEMON_MGR=./hindsight-embed/hindsight_embed/daemon_embed_manager.py
 if grep -qF '"--project", str(dev_api_path), "hindsight-api"' "$DAEMON_MGR"; then
-  sed -i.bak 's|"--project", str(dev_api_path), "hindsight-api"|"--project", str(dev_api_path), "--all-extras", "hindsight-api"|' "$DAEMON_MGR"
+  sed -i.bak 's|"--project", str(dev_api_path), "hindsight-api"|"--project", str(dev_api_path), "--extra", "all", "hindsight-api"|' "$DAEMON_MGR"
   rm -f "$DAEMON_MGR.bak"
-  print_info "patched bundled daemon_embed_manager.py to use --all-extras"
+  print_info "patched bundled daemon_embed_manager.py to use --extra all"
 fi
 
-# ---------- pack (sanity check) + publish ----------
-print_info "Running npm pack to verify tarball..."
+# ---------- pack (always) + publish (unless --no-publish) ----------
+print_info "Running npm pack to build tarball..."
 PACK_OUT="$(npm pack --json)"
 TARBALL="$(echo "$PACK_OUT" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s)[0].filename))')"
-print_info "tarball: $TARBALL"
+TARBALL_PATH="$PLUGIN_DIR/$TARBALL"
 TARBALL_SIZE=$(du -h "$TARBALL" | cut -f1)
-print_info "tarball size: $TARBALL_SIZE"
+print_info "tarball: $TARBALL_PATH ($TARBALL_SIZE)"
+
+if [ "$NO_PUBLISH" = "true" ]; then
+  echo
+  print_info "🧪 --no-publish: skipping npm publish, git commit, tag, push."
+  print_info ""
+  print_info "Tarball ready for VPS testing:"
+  print_info "  $TARBALL_PATH"
+  print_info ""
+  print_info "Test on VPS (example):"
+  print_info "  scp $TARBALL_PATH root@<vps>:/tmp/"
+  print_info "  ssh root@<vps> 'su - <user> -c \"openclaw plugins install --force /tmp/$TARBALL\"'"
+  print_info "  ssh root@<vps> 'systemctl restart openclaw-gateway'"
+  print_info ""
+  print_info "Working tree is dirty (version bumps). To clean up after testing:"
+  print_info "  git restore hindsight-api-slim/pyproject.toml hindsight-embed/pyproject.toml \\"
+  print_info "              hindsight-integrations/openclaw/package.json uv.lock"
+  print_info "  rm $TARBALL_PATH"
+  cleanup_bundle
+  trap - EXIT
+  exit 0
+fi
 
 print_info "Publishing $SCOPED_NAME@$VERSION (--access public --tag latest)..."
 # --tag latest: prerelease versions ($VERSION includes a -fork.N suffix) need
