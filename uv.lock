@@ -1538,7 +1538,7 @@ requires-dist = [{ name = "hindsight-api-slim", extras = ["all"], editable = "hi
 
 [[package]]
 name = "hindsight-api-slim"
-version = "0.6.7+fork.4"
+version = "0.6.7+fork.6"
 source = { editable = "hindsight-api-slim" }
 dependencies = [
     { name = "aiohttp" },
@@ -1827,7 +1827,7 @@ dev = [
 
 [[package]]
 name = "hindsight-embed"
-version = "0.6.7+fork.4"
+version = "0.6.7+fork.6"
 source = { editable = "hindsight-embed" }
 dependencies = [
     { name = "httpx" },
