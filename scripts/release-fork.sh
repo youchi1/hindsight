@@ -277,6 +277,21 @@ if grep -qF '"--project", str(dev_api_path), "hindsight-api"' "$DAEMON_MGR"; the
   print_info "patched bundled daemon_embed_manager.py to use --extra all"
 fi
 
+# Patch the bundled cli.py to stop injecting gpt-4o-mini when the user did
+# not explicitly set HINDSIGHT_API_LLM_MODEL. Upstream's get_default_model_for_provider
+# tries to import hindsight_api.config (which lives in a *separate* venv when
+# hindsight-embed is bundled), the import fails, and it falls back to a hard-
+# coded gpt-4o-mini regardless of provider. That value gets injected into the
+# daemon's env and overrides what hindsight-api would resolve correctly via its
+# own PROVIDER_DEFAULT_MODELS table. Strip the default at this layer so the
+# daemon's resolution wins.
+EMBED_CLI=./hindsight-embed/hindsight_embed/cli.py
+if grep -qF '"llm_model": os.environ.get("HINDSIGHT_API_LLM_MODEL", default_model),' "$EMBED_CLI"; then
+  sed -i.bak 's|"llm_model": os\.environ\.get("HINDSIGHT_API_LLM_MODEL", default_model),|"llm_model": os.environ.get("HINDSIGHT_API_LLM_MODEL"),  # let hindsight-api resolve provider-default|' "$EMBED_CLI"
+  rm -f "$EMBED_CLI.bak"
+  print_info "patched bundled cli.py to defer model resolution to hindsight-api"
+fi
+
 # ---------- pack (always) + publish (unless --no-publish) ----------
 print_info "Running npm pack to build tarball..."
 PACK_OUT="$(npm pack --json)"
