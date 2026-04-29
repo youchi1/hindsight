@@ -1,6 +1,6 @@
 {
   "name": "@youchi1/hindsight-openclaw",
-  "version": "0.6.7-fork.2",
+  "version": "0.6.7-fork.3",
   "description": "Hindsight memory plugin for OpenClaw - biomimetic long-term memory with fact extraction",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
