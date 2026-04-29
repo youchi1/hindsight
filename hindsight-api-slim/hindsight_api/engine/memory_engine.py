@@ -13,6 +13,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -29,6 +30,7 @@ from ..config import (
     DEFAULT_RECALL_INCLUDE_CHUNKS,
     DEFAULT_RECALL_MAX_TOKENS,
     DEFAULT_REFLECT_SOURCE_FACTS_MAX_TOKENS,
+    ENV_LLM_AUTH_SOURCE,
     get_config,
 )
 from ..db_url import to_libpq_url
@@ -471,7 +473,11 @@ class MemoryEngine(MemoryEngineInterface):
         if memory_llm_provider == "none":
             self._skip_llm_verification = True
         memory_llm_api_key = memory_llm_api_key or config.llm_api_key
-        if not memory_llm_api_key and requires_api_key(memory_llm_provider):
+        # When auth_source=openclaw, LLMConfig resolves the key from
+        # OpenClaw's auth-profiles.json at construction time, so an empty
+        # HINDSIGHT_API_LLM_API_KEY is expected here.
+        auth_source = os.getenv(ENV_LLM_AUTH_SOURCE, "env")
+        if not memory_llm_api_key and requires_api_key(memory_llm_provider) and auth_source != "openclaw":
             raise ValueError("LLM API key is required. Set HINDSIGHT_API_LLM_API_KEY environment variable.")
         memory_llm_model = memory_llm_model or config.llm_model
         memory_llm_base_url = memory_llm_base_url or config.get_llm_base_url() or None
