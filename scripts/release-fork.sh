@@ -79,6 +79,8 @@ command -v node >/dev/null || die "node not found"
 command -v npm  >/dev/null || die "npm not found"
 if NPM_USER="$(npm whoami --registry=https://registry.npmjs.org/ 2>/dev/null)"; then
   print_info "npm logged in as: $NPM_USER"
+elif [ "$NO_PUBLISH" = "true" ]; then
+  print_info "npm not logged in (skipped — --no-publish)"
 else
   print_warn "npm not logged in, launching npm login..."
   npm login --registry=https://registry.npmjs.org/
