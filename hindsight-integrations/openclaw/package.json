@@ -1,6 +1,6 @@
 {
-  "name": "@vectorize-io/hindsight-openclaw",
-  "version": "0.7.6",
+  "name": "@youchi1/hindsight-openclaw",
+  "version": "0.6.2-patched.1",
   "description": "Hindsight memory plugin for OpenClaw - biomimetic long-term memory with fact extraction",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -26,13 +26,14 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/vectorize-io/hindsight.git",
-    "directory": "hindsight-integrations/openclaw"
+    "url": "git+https://github.com/youchi1/hindsight.git"
   },
   "files": [
     "dist",
     "openclaw.plugin.json",
-    "README.md"
+    "README.md",
+    "hindsight-embed",
+    "hindsight-api-slim"
   ],
   "scripts": {
     "build": "tsc",
@@ -63,5 +64,9 @@
     "rollup": "^4.59.0",
     "picomatch": ">=2.3.2 <3.0.0 || >=4.0.4",
     "vite": ">=8.0.5"
-  }
+  },
+  "bugs": {
+    "url": "https://github.com/youchi1/hindsight/issues"
+  },
+  "homepage": "https://github.com/youchi1/hindsight#readme"
 }
