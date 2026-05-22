@@ -923,7 +923,7 @@ interface ResolveAndCacheIdentityOptions {
   pluginConfig?: PluginConfig;
 }
 
-function resolveAndCacheIdentity(options: ResolveAndCacheIdentityOptions): {
+export function resolveAndCacheIdentity(options: ResolveAndCacheIdentityOptions): {
   effectiveCtx: PluginHookAgentContext | undefined;
   resolvedCtx: PluginHookAgentContext | undefined;
   skipReason?: IdentitySkipReason;
@@ -933,6 +933,18 @@ function resolveAndCacheIdentity(options: ResolveAndCacheIdentityOptions): {
   const cachedIdentity = sessionKey ? sessionIdentityBySession.get(sessionKey) : undefined;
   const baseCtx =
     options.ctx || (sessionKey ? ({ sessionKey } as PluginHookAgentContext) : undefined);
+  // "main" is the dmScope sentinel produced by parseSessionKey for session keys
+  // of the form `agent:<id>:main`. It signals "no real channel was encoded in
+  // the session key", not "the session belongs to a provider literally named
+  // 'main'". When a real dispatch surface is available (telegram, slack, etc.),
+  // prefer it over the sentinel so the cross-channel privacy guard does not
+  // false-fire and retain records get tagged with the actual delivery channel.
+  // Operational provider sentinels (cron/heartbeat/subagent) are still left
+  // alone; excludeProviders and the operational-session skip path handle them.
+  const sessionProvider =
+    parsedSession.provider === "main" && options.dispatchChannel
+      ? options.dispatchChannel
+      : parsedSession.provider;
   const effectiveCtx =
     baseCtx || cachedIdentity || options.senderIdHint || options.dispatchChannel || sessionKey
       ? {
@@ -949,19 +961,19 @@ function resolveAndCacheIdentity(options: ResolveAndCacheIdentityOptions): {
       ? {
           ...effectiveCtx,
           messageProvider:
-            effectiveCtx.messageProvider ?? parsedSession.provider ?? options.dispatchChannel,
+            effectiveCtx.messageProvider ?? sessionProvider ?? options.dispatchChannel,
           channelId: effectiveCtx.channelId ?? parsedSession.channel,
         }
       : undefined
   );
 
   if (
-    parsedSession.provider &&
+    sessionProvider &&
     options.dispatchChannel &&
-    parsedSession.provider !== options.dispatchChannel
+    sessionProvider !== options.dispatchChannel
   ) {
     const skipReason = finalSkipReason(
-      `dispatch surface ${options.dispatchChannel} does not match session provider ${parsedSession.provider}`
+      `dispatch surface ${options.dispatchChannel} does not match session provider ${sessionProvider}`
     );
     if (sessionKey) {
       setCappedMapValue(skipHindsightTurnBySession, sessionKey, skipReason);

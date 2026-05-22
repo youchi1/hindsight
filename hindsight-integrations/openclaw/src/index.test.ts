@@ -14,6 +14,7 @@ import {
   parseSessionKey,
   extractTelegramDirectSenderId,
   resolveSessionIdentity,
+  resolveAndCacheIdentity,
   getIdentitySkipReason,
   isEphemeralOperationalText,
   deriveBankId,
@@ -1176,6 +1177,48 @@ describe("session identity helpers", () => {
       kind: "final",
       detail: "internal main session agent:main:main",
     });
+  });
+
+  it("allows dmScope main sessions through a real dispatch surface (no false cross-channel skip)", () => {
+    const result = resolveAndCacheIdentity({
+      sessionKey: "agent:cross-channel-1:main",
+      ctx: { sessionKey: "agent:cross-channel-1:main", senderId: "user-7" },
+      dispatchChannel: "telegram",
+      pluginConfig: { dynamicBankId: false, bankId: "shared" },
+    });
+    expect(result.skipReason).toBeUndefined();
+    expect(result.resolvedCtx?.messageProvider).toBe("telegram");
+  });
+
+  it("still skips when a real session provider mismatches the dispatch surface", () => {
+    const result = resolveAndCacheIdentity({
+      sessionKey: "agent:bob:telegram:direct:99999",
+      ctx: { sessionKey: "agent:bob:telegram:direct:99999", senderId: "99999" },
+      dispatchChannel: "slack",
+    });
+    expect(result.skipReason).toEqual({
+      kind: "final",
+      detail: "dispatch surface slack does not match session provider telegram",
+    });
+  });
+
+  it("leaves the main sentinel untouched when no dispatch surface is provided", () => {
+    const result = resolveAndCacheIdentity({
+      sessionKey: "agent:cross-channel-2:main",
+      ctx: { sessionKey: "agent:cross-channel-2:main", senderId: "user-8" },
+    });
+    expect(result.skipReason).toBeUndefined();
+    expect(result.resolvedCtx?.messageProvider).toBe("main");
+  });
+
+  it("keeps cross-channel skip firing on operational sessions dispatched to a real channel", () => {
+    const result = resolveAndCacheIdentity({
+      sessionKey: "agent:worker:cron:nightly:cleanup",
+      ctx: { sessionKey: "agent:worker:cron:nightly:cleanup" },
+      dispatchChannel: "telegram",
+    });
+    expect(result.skipReason?.kind).toBe("final");
+    expect(result.skipReason?.detail).toContain("does not match session provider cron");
   });
 
   it("detects ephemeral operational text with or without transcript wrappers", () => {
